@@ -1,6 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
+# --- Ensure /home/Threadpool exists and cd into it ---
+mkdir -p /home/Threadpool
+cd /home/Threadpool
+
 # --- Trap cleanup when script is killed ---
 function teardown() {
     echo "[cleanup] Stopping dotnet-counters, dotnet-trace, dotnet-dump, azcopy processes..."
@@ -107,6 +111,13 @@ upload_to_blob "$stacktrace_file" "$sas_url" || echo "[error] Stack trace upload
 
 echo "[stack] Stack trace upload succeeded."
 
+# --- Ask user for dotnet-counters collection duration ---
+echo -n "Enter dotnet-counters collection duration in seconds (default 300): "
+read -r COUNTER_DURATION
+if [[ -z "$COUNTER_DURATION" ]]; then
+    COUNTER_DURATION=300
+fi
+
 # --- Collect counter ---
 echo "[counter] Starting counter collection (dotnet-counters)..."
 countertrace_file="countertrace_${instance}_$(date '+%Y%m%d_%H%M%S').csv"
@@ -114,8 +125,8 @@ countertrace_file="countertrace_${instance}_$(date '+%Y%m%d_%H%M%S').csv"
 COUNTERS_PID=$!
 # Wait for file to appear
 while [[ ! -e "$countertrace_file" ]]; do sleep 1; done
-# Collect for 5 minutes
-sleep 300
+# Collect for user-specified duration
+sleep $COUNTER_DURATION
 kill $COUNTERS_PID
 if [ ! -s "$countertrace_file" ]; then
     echo "[error] Counter trace collection failed"
