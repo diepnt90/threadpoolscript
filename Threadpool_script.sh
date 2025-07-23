@@ -79,37 +79,19 @@ fi
 echo "[trace] Starting nettrace collection..."
 trace_file="trace_${instance}_$(date '+%Y%m%d_%H%M%S').nettrace"
 /tools/dotnet-trace collect -p "$pid" -o "$trace_file" --duration 00:01:00 > /dev/null || echo "[error] Nettrace collection failed"
-
-echo "[trace] Nettrace collected, waiting 5s before upload..."
-sleep 5
-echo "[trace] Starting nettrace upload..."
-upload_to_blob "$trace_file" "$sas_url" || echo "[error] Nettrace upload failed"
-
-echo "[trace] Nettrace upload succeeded."
+echo "[trace] Nettrace collected."
 
 # --- Collect memory dump ---
 echo "[dump] Starting memory dump collection..."
 dump_file="dump_${instance}_$(date '+%Y%m%d_%H%M%S').dmp"
 /tools/dotnet-dump collect -p "$pid" -o "$dump_file" > /dev/null || echo "[error] Memory dump collection failed"
-
-echo "[dump] Memory dump collected, waiting 5s before upload..."
-sleep 5
-echo "[dump] Starting memory dump upload..."
-upload_to_blob "$dump_file" "$sas_url" || echo "[error] Memory dump upload failed"
-
-echo "[dump] Memory dump upload succeeded."
+echo "[dump] Memory dump collected."
 
 # --- Collect stack trace ---
 echo "[stack] Starting stack trace collection..."
 stacktrace_file="stacktrace_${instance}_$(date '+%Y%m%d_%H%M%S').txt"
 /tools/dotnet-stack report -p "$pid" > "$stacktrace_file" || echo "[error] Stack trace collection failed"
-
-echo "[stack] Stack trace collected, waiting 5s before upload..."
-sleep 5
-echo "[stack] Starting stack trace upload..."
-upload_to_blob "$stacktrace_file" "$sas_url" || echo "[error] Stack trace upload failed"
-
-echo "[stack] Stack trace upload succeeded."
+echo "[stack] Stack trace collected."
 
 # --- Ask user for dotnet-counters collection duration ---
 echo -n "Enter dotnet-counters collection duration in seconds (default 300): "
@@ -123,20 +105,34 @@ echo "[counter] Starting counter collection (dotnet-counters)..."
 countertrace_file="countertrace_${instance}_$(date '+%Y%m%d_%H%M%S').csv"
 /tools/dotnet-counters collect --process-id "$pid" --counters "System.Runtime,System.Threading.Tasks.TplEventSource" --refresh-interval 1 --format csv --output "$countertrace_file" > /dev/null &
 COUNTERS_PID=$!
-# Wait for file to appear
 while [[ ! -e "$countertrace_file" ]]; do sleep 1; done
-# Collect for user-specified duration
 sleep $COUNTER_DURATION
 kill $COUNTERS_PID
 if [ ! -s "$countertrace_file" ]; then
     echo "[error] Counter trace collection failed"
 fi
+echo "[counter] Counter collected."
 
-echo "[counter] Counter collected, waiting 5s before upload..."
+# --- Upload all files after collection ---
+echo "all data have been collected, waiting for 10s before uploading to Blob."
+sleep 10
+echo "[trace] Starting nettrace upload..."
+upload_to_blob "$trace_file" "$sas_url" || echo "[error] Nettrace upload failed"
+echo "[trace] Nettrace upload succeeded, waiting for 5s before uploading next data"
 sleep 5
+
+echo "[dump] Starting memory dump upload..."
+upload_to_blob "$dump_file" "$sas_url" || echo "[error] Memory dump upload failed"
+echo "[dump] Memory dump upload succeeded, waiting for 5s before uploading next data"
+sleep 5
+
+echo "[stack] Starting stack trace upload..."
+upload_to_blob "$stacktrace_file" "$sas_url" || echo "[error] Stack trace upload failed"
+echo "[stack] Stack trace upload succeeded, waiting for 5s before uploading next data"
+sleep 5
+
 echo "[counter] Starting counter trace upload..."
 upload_to_blob "$countertrace_file" "$sas_url" || echo "[error] Counter trace upload failed"
-
 echo "[counter] Counter trace upload succeeded."
-
-echo "[done] All data collection and upload steps are complete, let transfer to Problem team for analyzing!" 
+sleep 5
+echo "[done] All data collection and upload steps are complete, let transfer to Problem team for analyzing, have a great day!" 
