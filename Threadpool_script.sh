@@ -114,25 +114,29 @@ fi
 echo "[counter] Counter collected."
 
 # --- Upload all files after collection ---
-echo "all data have been collected, waiting for 10s before uploading to Blob."
-sleep 10
+echo "all data have been collected, waiting for 20s before uploading to Blob."
+sleep 20
 echo "[trace] Starting nettrace upload..."
 upload_to_blob "$trace_file" "$sas_url" || echo "[error] Nettrace upload failed"
-echo "[trace] Nettrace upload succeeded, waiting for 5s before uploading next data"
-sleep 5
+echo "[trace] Nettrace upload succeeded, waiting for 10s before uploading next data"
+sleep 10
 
 echo "[dump] Starting memory dump upload..."
 upload_to_blob "$dump_file" "$sas_url" || echo "[error] Memory dump upload failed"
-echo "[dump] Memory dump upload succeeded, waiting for 5s before uploading next data"
-sleep 5
+echo "[dump] Memory dump upload succeeded, waiting for 10s before uploading next data"
+sleep 10
 
 echo "[stack] Starting stack trace upload..."
 upload_to_blob "$stacktrace_file" "$sas_url" || echo "[error] Stack trace upload failed"
-echo "[stack] Stack trace upload succeeded, waiting for 5s before uploading next data"
-sleep 5
+echo "[stack] Stack trace upload succeeded, waiting for 10s before uploading next data"
+sleep 10
 
 echo "[counter] Starting counter trace upload..."
 upload_to_blob "$countertrace_file" "$sas_url" || echo "[error] Counter trace upload failed"
 echo "[counter] Counter trace upload succeeded."
-sleep 5
+sleep 10
 echo "[done] All data collection and upload steps are complete, let transfer to Problem team for analyzing, have a great day!" 
+# --- Cleanup: Delete all data files in /home/Threadpool ---
+echo "[cleanup] Deleting all data files in /home/Threadpool..."
+find /home/Threadpool -type f -delete 
+echo "Completed"
