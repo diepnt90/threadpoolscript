@@ -7,7 +7,7 @@ set -euo pipefail
 # =========================
 WORKDIR="/home/Threadpool"
 TOOLS_DIR="/tools"
-TRACE_DURATION_SECONDS=60            # Thời lượng nettrace
+TRACE_DURATION_SECONDS=90            # Thời lượng nettrace
 COUNTER_LIST="System.Runtime,System.Threading.Tasks.TplEventSource,Microsoft.AspNetCore.Hosting,Microsoft-AspNetCore-Server-Kestrel"
 UPLOAD_INITIAL_DELAY=20              # chờ trước khi upload (giây)
 UPLOAD_GAP=10                        # nghỉ giữa các lần upload (giây)
@@ -110,11 +110,11 @@ stacktrace_file="stacktrace_${instance}_$(date '+%Y%m%d_%H%M%S').txt"
 [ -s "$stacktrace_file" ] && echo "[stack] Stack trace collected." || echo "[stack] Missing or empty."
 
 # =========================
-# Thu NETTRACE (60s)
+# Thu NETTRACE (90s)
 # =========================
 echo "[trace] Collecting nettrace for ${TRACE_DURATION_SECONDS}s..."
 trace_file="trace_${instance}_$(date '+%Y%m%d_%H%M%S').nettrace"
-"$TOOLS_DIR/dotnet-trace" collect -p "$pid" -o "$trace_file" --duration "00:01:00" > /dev/null \
+"$TOOLS_DIR/dotnet-trace" collect -p "$pid" --providers "Microsoft-DotNETCore-SampleProfiler,Microsoft-Windows-DotNETRuntime:0x0001C001:5,Microsoft-AspNetCore-Hosting:0xFFFFFFFFFFFFFFFF:4,Microsoft-AspNetCore-Server-Kestrel:0xFFFFFFFFFFFFFFFF:4,System.Net.Http:0xFFFFFFFFFFFFFFFF:4,System.Net.Sockets:0xFFFFFFFFFFFFFFFF:4" -o "$trace_file" --duration "00:01:30" > /dev/null \
   || { echo "[error] Nettrace collection failed"; touch "$trace_file.failed"; }
 [ -s "$trace_file" ] && echo "[trace] Nettrace collected." || echo "[trace] Missing or empty."
 
