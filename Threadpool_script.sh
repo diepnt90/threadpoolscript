@@ -1,183 +1,178 @@
-
 #!/bin/bash
 set -euo pipefail
 
-# =========================
-# Config (có thể tùy biến)
-# =========================
+############################################
+# GLOBAL CLEANUP BEFORE ANYTHING RUNS
+############################################
+echo "[startup] Cleaning stale diagnostic processes..."
+pkill -f dotnet-counters 2>/dev/null || true
+pkill -f dotnet-trace    2>/dev/null || true
+pkill -f dotnet-dump     2>/dev/null || true
+pkill -f azcopy          2>/dev/null || true
+pkill -f Auto_resp_collect.sh 2>/dev/null || true
+pkill -f Auto_cpu_collect.sh  2>/dev/null || true
+pkill -f Auto_mem_collect.sh  2>/dev/null || true
+pkill -f collector_core.sh     2>/dev/null || true
+pkill -f curl 2>/dev/null || true
+echo "[startup] Cleanup completed."
+
+############################################
+# CONFIG
+############################################
 WORKDIR="/home/Threadpool"
-TOOLS_DIR="/tools"
-TRACE_DURATION_SECONDS=90            # Thời lượng nettrace
-COUNTER_LIST="System.Runtime,System.Threading.Tasks.TplEventSource,Microsoft.AspNetCore.Hosting,Microsoft-AspNetCore-Server-Kestrel"
-UPLOAD_INITIAL_DELAY=20              # chờ trước khi upload (giây)
-UPLOAD_GAP=10                        # nghỉ giữa các lần upload (giây)
-MAX_UPLOAD_RETRY=5
-
-# =========================
-# Chuẩn bị môi trường
-# =========================
 mkdir -p "$WORKDIR"
-cd "$WORKDIR"
 
-teardown() {
-  echo "[cleanup] Stopping dotnet-counters, dotnet-trace, dotnet-dump, azcopy processes..."
-  pkill -f "$TOOLS_DIR/dotnet-counters" || true
-  pkill -f "$TOOLS_DIR/dotnet-trace"    || true
-  pkill -f "$TOOLS_DIR/dotnet-dump"     || true
-  pkill -f "$TOOLS_DIR/azcopy"          || true
-  echo "[cleanup] Cleanup completed."
-  exit 0
-}
-trap teardown SIGINT SIGTERM
+COLLECTOR_URL="https://raw.githubusercontent.com/hapm0598/Threadpool/refs/heads/main/collector_core.sh"
+AUTO_RESP_URL="https://raw.githubusercontent.com/hapm0598/Threadpool/refs/heads/main/Auto_resp_collect.sh"
+AUTO_CPU_URL="https://raw.githubusercontent.com/hapm0598/Threadpool/refs/heads/main/Auto_cpu_collect.sh"
+AUTO_MEM_URL="https://raw.githubusercontent.com/hapm0598/Threadpool/refs/heads/main/Auto_mem_collect.sh"
 
-die() { echo "[error] $1" >&2; exit "${2:-1}"; }
+############################################
+# HELPER: DOWNLOAD SCRIPT
+############################################
+download_script() {
+    local url="$1"
+    local dest="$2"
+    echo "[download] Fetching $dest ..."
+    curl -sSL "$url" -o "$dest"
+    chmod +x "$dest"
+    sed -i 's/\r$//' "$dest"
 
-# =========================
-# Helpers
-# =========================
-get_env_from_pid() {
-  local pid="$1" key="$2"
-  local val
-  val=$(cat "/proc/$pid/environ" | tr '\0' '\n' | grep -w "$key" || true)
-  val=${val#*=}
-  echo "${val:-}"
-}
-
-upload_to_blob() {
-  local file_path="$1" sas_url="$2"
-  local attempt=1
-  while [ $attempt -le $MAX_UPLOAD_RETRY ]; do
-    echo "[upload] Uploading $file_path (attempt $attempt/$MAX_UPLOAD_RETRY)..."
-    azcopy_output=$("$TOOLS_DIR/azcopy" copy "$file_path" "$sas_url" 2>&1 || true)
-    if echo "$azcopy_output" | grep -q "Final Job Status: Completed"; then
-      echo "[upload] $file_path uploaded."
-      return 0
+    if [[ ! -s "$dest" ]]; then
+        echo "[error] Failed to download $dest"
+        exit 1
     fi
-    echo "[upload] Upload failed, retrying..."
-    attempt=$((attempt+1))
-    sleep 3
-  done
-  echo "[upload] Upload $file_path failed after $MAX_UPLOAD_RETRY attempts."
-  return 1
 }
 
-# =========================
-# Xác định PID .NET & metadata
-# =========================
-pid=$("$TOOLS_DIR/dotnet-dump" ps | grep "/usr/share/dotnet/dotnet" | grep -v grep | tr -s " " | cut -d" " -f2 || true)
-[ -n "${pid:-}" ] || die "Could not find any running .NET process"
+############################################
+# MAIN MENU
+############################################
+echo "==============================="
+echo " THREADPOOL DIAGNOSTIC TOOL"
+echo "==============================="
+echo "1) Manual Mode"
+echo "2) Auto Mode"
+read -r -p "Select mode (1/2): " MODE
+MODE=${MODE:-1}
 
-instance="$(get_env_from_pid "$pid" "COMPUTERNAME")"
-[ -n "$instance" ] || die "Could not find COMPUTERNAME environment variable"
+############################################
+# AUTO MODE
+############################################
+if [[ "$MODE" == "2" ]]; then
+    echo "==============================="
+    echo "        AUTO MODE OPTIONS"
+    echo "==============================="
+    echo "1) Response Time Auto Mode"
+    echo "2) CPU Auto Mode"
+    echo "3) Memory Auto Mode"
+    read -r -p "Select (1/2/3): " AUTO_MODE
 
-sas_url="$(get_env_from_pid "$pid" "DIAGNOSTICS_AZUREBLOBCONTAINERSASURL")"
-[ -n "$sas_url" ] || die "Could not find DIAGNOSTICS_AZUREBLOBCONTAINERSASURL environment variable"
+    case "$AUTO_MODE" in
 
-# =========================
-# Hỏi thời lượng counters
-# =========================
-read -r -p "Enter dotnet-counters collection duration in seconds (default 300): " COUNTER_DURATION
-COUNTER_DURATION=${COUNTER_DURATION:-300}
+    #############################################################
+    # AUTO MODE 1 — RESPONSE TIME
+    #############################################################
+    1)
+        read -r -p "Enter URL (-l), default http://localhost:80: " AUTO_L
+        read -r -p "Enter threshold (-t ms), default 1000: " AUTO_T
+        read -r -p "Enter frequency (-f seconds), default 10: " AUTO_F
 
-# =========================
-# Bắt đầu COUNTERS (nền)
-# =========================
-echo "[counter] Starting dotnet-counters in background..."
-countertrace_file="countertrace_${instance}_$(date '+%Y%m%d_%H%M%S').csv"
-COUNTERS_START_TS=$(date +%s)
+        AUTO_L=${AUTO_L:-http://localhost:80}
+        AUTO_T=${AUTO_T:-1000}
+        AUTO_F=${AUTO_F:-10}
 
-"$TOOLS_DIR/dotnet-counters" collect \
-  --process-id "$pid" \
-  --counters "$COUNTER_LIST" \
-  --refresh-interval 1 \
-  --format csv \
-  --output "$countertrace_file" > /dev/null &
-COUNTERS_PID=$!
+        echo "[auto] ResponseTime args: -l $AUTO_L -t $AUTO_T -f $AUTO_F"
 
-# Đợi file counters xuất hiện (tối đa 10s)
-for i in {1..10}; do
-  [ -e "$countertrace_file" ] && break
-  sleep 1
-done
+        pkill -f Auto_resp_collect.sh 2>/dev/null || true
+        pkill -f curl 2>/dev/null || true
 
-# =========================
-# Chụp STACK TRACE (nhanh)
-# =========================
-echo "[stack] Capturing stack trace..."
-stacktrace_file="stacktrace_${instance}_$(date '+%Y%m%d_%H%M%S').txt"
-"$TOOLS_DIR/dotnet-stack" report -p "$pid" > "$stacktrace_file" \
-  || { echo "[error] Stack trace collection failed"; rm -f "$stacktrace_file"; }
-[ -s "$stacktrace_file" ] && echo "[stack] Stack trace collected." || echo "[stack] Missing or empty."
+        download_script "$COLLECTOR_URL" "$WORKDIR/collector_core.sh"
+        download_script "$AUTO_RESP_URL" "$WORKDIR/Auto_resp_collect.sh"
 
-# =========================
-# Thu NETTRACE (90s)
-# =========================
-echo "[trace] Collecting nettrace for ${TRACE_DURATION_SECONDS}s..."
-trace_file="trace_${instance}_$(date '+%Y%m%d_%H%M%S').nettrace"
-"$TOOLS_DIR/dotnet-trace" collect -p "$pid" --providers "Microsoft-DotNETCore-SampleProfiler,Microsoft-Windows-DotNETRuntime:0x0001C001:5,Microsoft-AspNetCore-Hosting:0xFFFFFFFFFFFFFFFF:4,Microsoft-AspNetCore-Server-Kestrel:0xFFFFFFFFFFFFFFFF:4,System.Net.Http:0xFFFFFFFFFFFFFFFF:4,System.Net.Sockets:0xFFFFFFFFFFFFFFFF:4,Microsoft.Data.SqlClient.EventSource:5" -o "$trace_file" --duration "00:01:30" > /dev/null \
-  || { echo "[error] Nettrace collection failed"; touch "$trace_file.failed"; }
-[ -s "$trace_file" ] && echo "[trace] Nettrace collected." || echo "[trace] Missing or empty."
+        echo "[auto] Starting ResponseTime Auto Monitor..."
+        nohup "$WORKDIR/Auto_resp_collect.sh" \
+            -l "$AUTO_L" -t "$AUTO_T" -f "$AUTO_F" enable-dump-trace \
+            > "$WORKDIR/auto_resp_monitor.log" 2>&1 &
 
-# =========================
-# Thu DUMP (cuối cùng)
-# =========================
-echo "[dump] Collecting memory dump (this may pause the app briefly)..."
-dump_file="dump_${instance}_$(date '+%Y%m%d_%H%M%S').dmp"
-"$TOOLS_DIR/dotnet-dump" collect -p "$pid" -o "$dump_file" > /dev/null \
-  || { echo "[error] Memory dump collection failed"; rm -f "$dump_file"; }
-[ -s "$dump_file" ] && echo "[dump] Memory dump collected." || echo "[dump] Missing or empty."
+        echo "[auto] ResponseTime Auto monitoring started."
+        exit 0
+        ;;
 
-# =========================
-# Đảm bảo COUNTERS chạy đủ lâu
-# =========================
-COUNTERS_END_TS=$(date +%s)
-ELAPSED=$((COUNTERS_END_TS - COUNTERS_START_TS))
-if [ "$ELAPSED" -lt "$COUNTER_DURATION" ]; then
-  REMAIN=$((COUNTER_DURATION - ELAPSED))
-  echo "[counter] Ensuring minimum duration, sleeping ${REMAIN}s..."
-  sleep "$REMAIN" || true
+    #############################################################
+    # AUTO MODE 2 — CPU MONITOR
+    #############################################################
+    2)
+        read -r -p "Enter CPU threshold (%) of TOTAL CPU (default 80): " CPU_P
+        read -r -p "Enter frequency (seconds), default 10: " CPU_F
+
+        CPU_P=${CPU_P:-80}
+        CPU_F=${CPU_F:-10}
+
+        echo "[auto] CPU args: -p $CPU_P -f $CPU_F"
+
+        pkill -f Auto_cpu_collect.sh 2>/dev/null || true
+        pkill -f curl 2>/dev/null || true
+
+        download_script "$COLLECTOR_URL" "$WORKDIR/collector_core.sh"
+        download_script "$AUTO_CPU_URL" "$WORKDIR/Auto_cpu_collect.sh"
+
+        echo "[auto] Starting CPU Auto Monitor..."
+        nohup "$WORKDIR/Auto_cpu_collect.sh" \
+            -p "$CPU_P" -f "$CPU_F" \
+            > "$WORKDIR/auto_cpu_monitor.log" 2>&1 &
+
+        echo "[auto] CPU Auto monitoring started."
+        exit 0
+        ;;
+
+    #############################################################
+    # AUTO MODE 3 — MEMORY MONITOR (TOTAL MEMORY)
+    #############################################################
+    3)
+        read -r -p "Enter Memory threshold (% used), default 80: " MEM_T
+        read -r -p "Enter frequency (seconds), default 10: " MEM_F
+
+        MEM_T=${MEM_T:-80}
+        MEM_F=${MEM_F:-10}
+
+        echo "[auto] Memory args: -t $MEM_T -f $MEM_F"
+
+        pkill -f Auto_mem_collect.sh 2>/dev/null || true
+        pkill -f curl 2>/dev/null || true
+
+        download_script "$COLLECTOR_URL" "$WORKDIR/collector_core.sh"
+        download_script "$AUTO_MEM_URL" "$WORKDIR/Auto_mem_collect.sh"
+
+        echo "[auto] Starting Memory Auto Monitor..."
+        nohup "$WORKDIR/Auto_mem_collect.sh" \
+            -t "$MEM_T" -f "$MEM_F" \
+            > "$WORKDIR/auto_mem_monitor.log" 2>&1 &
+
+        echo "[auto] Memory Auto monitoring started."
+        exit 0
+        ;;
+
+    *)
+        echo "[error] Invalid Auto Mode selection"
+        exit 1
+        ;;
+    esac
 fi
-echo "[counter] Stopping dotnet-counters..."
-kill "$COUNTERS_PID" || true
-# chờ tắt hẳn
-wait "$COUNTERS_PID" 2>/dev/null || true
-[ -s "$countertrace_file" ] && echo "[counter] Counter trace collected." || echo "[error] Counter trace missing or empty."
 
-# =========================
-# Upload artefacts
-# =========================
-echo "All data have been collected, waiting for ${UPLOAD_INITIAL_DELAY}s before uploading to Blob."
-sleep "$UPLOAD_INITIAL_DELAY"
+############################################
+# MANUAL MODE
+############################################
+echo "[manual] Manual Mode Selected"
+download_script "$COLLECTOR_URL" "$WORKDIR/collector_core.sh"
 
-if [ -e "$trace_file" ]; then
-  echo "[trace] Uploading nettrace..."
-  upload_to_blob "$trace_file" "$sas_url" || echo "[error] Nettrace upload failed"
-  sleep "$UPLOAD_GAP"
+read -r -p "Collect memory dump? (y/N): " USER_DUMP
+USER_DUMP=${USER_DUMP:-N}
+
+if [[ "$USER_DUMP" =~ ^[Yy]$ ]]; then
+    DUMP_FLAG="--manual-dump"
+else
+    DUMP_FLAG="--manual-nodump"
 fi
 
-if [ -e "$dump_file" ]; then
-  echo "[dump] Uploading memory dump..."
-  upload_to_blob "$dump_file" "$sas_url" || echo "[error] Memory dump upload failed"
-  sleep "$UPLOAD_GAP"
-fi
-
-if [ -e "$stacktrace_file" ]; then
-  echo "[stack] Uploading stack trace..."
-  upload_to_blob "$stacktrace_file" "$sas_url" || echo "[error] Stack trace upload failed"
-  sleep "$UPLOAD_GAP"
-fi
-
-if [ -e "$countertrace_file" ]; then
-  echo "[counter] Uploading counter trace..."
-  upload_to_blob "$countertrace_file" "$sas_url" || echo "[error] Counter trace upload failed"
-  sleep "$UPLOAD_GAP"
-fi
-
-echo "[done] All data collection and upload steps are complete. Hand off to Problem team. Have a great day!"
-
-# =========================
-# Cleanup (chỉ file đã tạo)
-# =========================
-echo "[cleanup] Deleting diagnostic files in $WORKDIR..."
-rm -f "$trace_file" "$dump_file" "$stacktrace_file" "$countertrace_file" 2>/dev/null || true
-echo "Completed"
+echo "[manual] Running collector ..."
+bash "$WORKDIR/collector_core.sh" --manual $DUMP_FLAG
