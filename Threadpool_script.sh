@@ -19,7 +19,11 @@ echo "[startup] Cleanup completed."
 ############################################
 # CONFIG
 ############################################
-WORKDIR="/home/Threadpool"
+# Detect instance name (App Service instance ID)
+instancehome=$(hostname)
+
+# WORKDIR unique for this instance
+WORKDIR="/home/Troubleshooting/${instancehome}"
 mkdir -p "$WORKDIR"
 
 COLLECTOR_URL="https://raw.githubusercontent.com/hapm0598/Threadpool/refs/heads/main/collector_core.sh"
