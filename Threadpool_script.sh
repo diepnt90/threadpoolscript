@@ -13,9 +13,74 @@ pkill -f Auto_resp_collect.sh 2>/dev/null || true
 pkill -f Auto_cpu_collect.sh  2>/dev/null || true
 pkill -f Auto_mem_collect.sh  2>/dev/null || true
 pkill -f collector_core.sh     2>/dev/null || true
+pkill -f Auto_tcp_collect.sh     2>/dev/null || true
 pkill -f curl 2>/dev/null || true
 
 echo "[startup] Cleanup completed."
+
+############################################
+# SAFE DELETE DIRECTORY v3 (overlayfs optimized)
+############################################
+safe_delete_dir() {
+    local target="$1"
+    local max_retries=5
+    local retry=0
+
+    echo "[safe_delete] Request to delete: $target"
+
+    # Safety check
+    if [[ ! "$target" =~ ^/home/Troubleshooting/ ]]; then
+        echo "[safe_delete][ERROR] Unsafe path: $target"
+        return 1
+    fi
+
+    if [[ ! -d "$target" ]]; then
+        echo "[safe_delete] Directory not found. Nothing to delete."
+        return 0
+    fi
+
+    # Prevent deleting while shell is inside
+    if [[ "$(pwd)" == "$target"* ]]; then
+        echo "[safe_delete] Shell is inside target. Moving to /home"
+        cd /home || cd /
+    fi
+
+    # STEP 1: Kill processes using directory
+    echo "[safe_delete] Checking for processes using directory..."
+    local pids
+    pids=$(lsof +D "$target" 2>/dev/null | awk 'NR>1 {print $2}' | sort -u)
+
+    if [[ -n "$pids" ]]; then
+        echo "[safe_delete] Processes detected:"
+        echo "$pids" | sed 's/^/  PID: /'
+        echo "$pids" | xargs -r kill -9
+        sleep 1
+    else
+        echo "[safe_delete] No processes holding directory."
+    fi
+
+    # STEP 2: Remove .nfs leftover files
+    echo "[safe_delete] Removing .nfs* files (if any)..."
+    find "$target" -maxdepth 5 -type f -name ".nfs*" -print -delete 2>/dev/null || true
+
+    # STEP 3: rm -rf with retries because overlayfs may delay dentry removal
+    while [[ $retry -lt $max_retries ]]; do
+        echo "[safe_delete] rm -rf attempt $((retry+1))/$max_retries ..."
+        rm -rf "$target" 2>/dev/null
+
+        if [[ ! -d "$target" ]]; then
+            echo "[safe_delete] Directory deleted successfully."
+            return 0
+        fi
+
+        echo "[safe_delete][WARN] Directory still exists. Waiting for overlayfs dentry release..."
+        sleep 1
+        retry=$((retry+1))
+    done
+
+    echo "[safe_delete][ERROR] Could not delete directory after retries."
+    return 1
+}
 
 ##########################################
 # GET INSTANCE FROM COMPUTERNAME
@@ -36,14 +101,14 @@ fi
 # WORKDIR unique for this instance
 WORKDIR="/home/Troubleshooting/${instancehome}"
 
-# Clean existing WORKDIR if present
-if [[ "$WORKDIR" == /home/Troubleshooting/* ]]; then
-    rm -rf "$WORKDIR"
-    echo "deleted old troubleshooting folder."
-else
-    echo "[error] WORKDIR path is unsafe, aborting delete."
+############################################
+# SAFE CLEANUP WORKDIR
+############################################
+echo "[cleanup] Removing old WORKDIR if it exists..."
+safe_delete_dir "$WORKDIR" || {
+    echo "[error] Could not clean WORKDIR. Aborting."
     exit 1
-fi
+}
 
 mkdir -p "$WORKDIR"
 
