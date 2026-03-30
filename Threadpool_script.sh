@@ -212,6 +212,102 @@ if [[ "$MODE" == "2" ]]; then
 
         echo "[auto] Max days: $AUTO_MAX_DAYS"
 
+        ############################################
+        # VALIDATE URL BEFORE STARTING MONITOR
+        ############################################
+        while true; do
+            echo "[validate] Testing URL: $AUTO_L ..."
+            url_tmp="${AUTO_L#*://}"
+            host_tmp="${url_tmp%%/*}"
+
+            # Detect external vs internal
+            if [[ "$AUTO_L" =~ ^https?:// ]] && [[ ! "$AUTO_L" =~ localhost ]] && [[ ! "$AUTO_L" =~ 127\.0\.0\.1 ]]; then
+                # External URL: test via internet with ARR Affinity if available
+                dotnet_pid=$(/tools/dotnet-dump ps 2>/dev/null | awk '$0 ~ /\/usr\/share\/dotnet\/dotnet/ {print $1; exit}' || true)
+                arr_cookie=""
+                if [[ -n "$dotnet_pid" ]]; then
+                    website_instance_id=$(cat "/proc/$dotnet_pid/environ" 2>/dev/null | tr '\0' '\n' | grep -w WEBSITE_INSTANCE_ID | cut -d'=' -f2 || true)
+                    if [[ -n "$website_instance_id" ]]; then
+                        arr_cookie="-H \"Cookie: ARRAffinitySameSite=$website_instance_id\""
+                        echo "[validate] Using ARR Affinity: $website_instance_id"
+                    fi
+                fi
+                validate_result=$(eval curl -so /dev/null -w "%{http_code}" -m 10 $arr_cookie "$AUTO_L" 2>/dev/null || echo "000")
+            elif [[ "$AUTO_L" == "http://localhost"* ]]; then
+                # Internal localhost
+                validate_result=$(curl -so /dev/null -w "%{http_code}" -m 10 "$AUTO_L" --resolve "$host_tmp":127.0.0.1 2>/dev/null || echo "000")
+            else
+                validate_result=$(curl -so /dev/null -w "%{http_code}" -m 10 "$AUTO_L" 2>/dev/null || echo "000")
+            fi
+
+            echo "[validate] HTTP response code: $validate_result"
+
+            if [[ "$validate_result" == "200" ]]; then
+                echo "[validate] URL is valid and returning 200 OK. Proceeding..."
+                break
+            else
+                echo ""
+                echo "=========================================================="
+                case "$validate_result" in
+                    000)
+                        echo "[WARNING] No response from URL: $AUTO_L"
+                        echo "  HTTP Code : 000 (connection failed)"
+                        echo "  Possible causes:"
+                        echo "    - App has not started yet or crashed"
+                        echo "    - Wrong port or hostname"
+                        echo "  Action: please provide a correct URL"
+                        ;;
+                    3*)
+                        echo "[WARNING] URL is returning a REDIRECT (HTTP $validate_result)"
+                        echo "  URL : $AUTO_L"
+                        echo "  Monitoring a redirect URL may produce inaccurate results"
+                        echo "  because response time only measures the redirect, not the"
+                        echo "  actual page load."
+                        echo "  Action: use a direct endpoint, e.g. /health or /ping"
+                        echo "  Tip: find the real URL by running:"
+                        echo "    curl -sI $AUTO_L | grep -i location"
+                        ;;
+                    4*)
+                        echo "[WARNING] URL returned a client error (HTTP $validate_result)"
+                        echo "  URL : $AUTO_L"
+                        case "$validate_result" in
+                            401|403) echo "  Reason: authentication/authorization required" ;;
+                            404)     echo "  Reason: endpoint does not exist" ;;
+                            *)       echo "  Reason: client-side error" ;;
+                        esac
+                        echo "  Action: use a valid endpoint that returns 200, e.g. /health"
+                        ;;
+                    5*)
+                        echo "[WARNING] URL returned a server error (HTTP $validate_result)"
+                        echo "  URL : $AUTO_L"
+                        echo "  Reason: application is experiencing an internal error"
+                        echo "  Note: you may still monitor this URL, but the app is"
+                        echo "        already in an error state."
+                        ;;
+                esac
+                echo "=========================================================="
+                echo ""
+
+                # For 5xx: allow user to proceed or re-enter
+                if [[ "$validate_result" =~ ^5 ]]; then
+                    read -r -p "Proceed with monitoring anyway? (y/N): " PROCEED
+                    PROCEED=${PROCEED:-N}
+                    if [[ "$PROCEED" =~ ^[Yy]$ ]]; then
+                        echo "[validate] Proceeding with monitoring despite server error..."
+                        break
+                    fi
+                fi
+
+                read -r -p "Enter a different URL (or press Enter to keep '$AUTO_L'): " NEW_URL
+                if [[ -n "$NEW_URL" ]]; then
+                    AUTO_L="$NEW_URL"
+                else
+                    echo "[validate] Keeping URL: $AUTO_L"
+                    break
+                fi
+            fi
+        done
+
         echo "[auto] ResponseTime args: -l $AUTO_L -t $AUTO_T -f $AUTO_F -w $AUTO_W $DUMP_FLAG"
 
         pkill -f Auto_resp_collect.sh 2>/dev/null || true
