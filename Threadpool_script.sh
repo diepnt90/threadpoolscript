@@ -8,6 +8,7 @@ echo "[startup] Cleaning stale diagnostic processes..."
 pkill -f dotnet-counters 2>/dev/null || true
 pkill -f dotnet-trace    2>/dev/null || true
 pkill -f dotnet-dump     2>/dev/null || true
+pkill -f dotnet-gcdump   2>/dev/null || true
 pkill -f azcopy          2>/dev/null || true
 pkill -f Auto_resp_collect.sh 2>/dev/null || true
 pkill -f Auto_cpu_collect.sh  2>/dev/null || true
@@ -378,10 +379,27 @@ if [[ "$MODE" == "2" ]]; then
         AUTO_DUMP=${AUTO_DUMP:-N}
 
         if [[ "$AUTO_DUMP" =~ ^[Yy]$ ]]; then
-        DUMP_FLAG="--enable-dump"
-       else
-        DUMP_FLAG=""
-       fi
+            echo "==============================="
+            echo "   SELECT DUMP TYPE"
+            echo "==============================="
+            echo "1) Full Memory Dump"
+            echo "2) GC Dump"
+            read -r -p "Select dump type (1/2): " DUMP_TYPE_CHOICE
+            DUMP_TYPE_CHOICE=${DUMP_TYPE_CHOICE:-1}
+
+            if [[ "$DUMP_TYPE_CHOICE" == "1" ]]; then
+                DUMP_FLAG="--enable-fulldump"
+                echo "[auto] Selected: Full Memory Dump"
+            elif [[ "$DUMP_TYPE_CHOICE" == "2" ]]; then
+                DUMP_FLAG="--enable-gcdump"
+                echo "[auto] Selected: GC Dump"
+            else
+                echo "[error] Invalid dump type selection"
+                exit 1
+            fi
+        else
+            DUMP_FLAG=""
+        fi
 
         MEM_T=${MEM_T:-80}
         MEM_F=${MEM_F:-10}
@@ -463,7 +481,24 @@ read -r -p "Collect memory dump? (y/N): " USER_DUMP
 USER_DUMP=${USER_DUMP:-N}
 
 if [[ "$USER_DUMP" =~ ^[Yy]$ ]]; then
-    DUMP_FLAG="--manual-dump"
+    echo "==============================="
+    echo "   SELECT DUMP TYPE"
+    echo "==============================="
+    echo "1) Full Memory Dump"
+    echo "2) GC Dump"
+    read -r -p "Select dump type (1/2): " DUMP_TYPE
+    DUMP_TYPE=${DUMP_TYPE:-1}
+
+    if [[ "$DUMP_TYPE" == "1" ]]; then
+        DUMP_FLAG="--manual-fulldump"
+        echo "[manual] Selected: Full Memory Dump"
+    elif [[ "$DUMP_TYPE" == "2" ]]; then
+        DUMP_FLAG="--manual-gcdump"
+        echo "[manual] Selected: GC Dump"
+    else
+        echo "[error] Invalid dump type selection"
+        exit 1
+    fi
 else
     DUMP_FLAG="--manual-nodump"
 fi
